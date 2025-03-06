@@ -16,11 +16,20 @@
 
 #![cfg(test)]
 
+use codec::Encode;
 use collectives_westend_runtime::{
+	dday::{prover, DDayReferendaInstance, DDayVotingInstance, SubmissionDeposit},
 	xcm_config::{GovernanceLocation, LocationToAccountId},
-	Block, Runtime, RuntimeCall, RuntimeOrigin,
+	Balances, Block, DDayReferenda, DDayVoting, ExistentialDeposit, FellowshipCollective, Preimage,
+	ProofsKey, ProofsStorage, ProofsValue, Runtime, RuntimeCall, RuntimeOrigin,
 };
-use frame_support::{assert_err, assert_ok};
+use frame_support::{
+	assert_err, assert_ok,
+	traits::{fungible::Mutate, schedule::DispatchTime, StorePreimage},
+	BoundedVec,
+};
+use pallet_proofs_voting::{AccountVote, Conviction, Vote, VerifyProof};
+use pallet_referenda::{ReferendumCount, ReferendumInfoFor};
 use parachains_common::AccountId;
 use parachains_runtimes_test_utils::GovernanceOrigin;
 use sp_core::crypto::Ss58Codec;
@@ -198,4 +207,104 @@ fn governance_authorize_upgrade_works() {
 		Runtime,
 		RuntimeOrigin,
 	>(GovernanceOrigin::Location(GovernanceLocation::get())));
+}
+
+#[test]
+fn dday_feature_works() {
+	sp_io::TestExternalities::new(Default::default()).execute_with(|| {
+		// create rank3+ fallow
+		let account_fellow_rank3 = AccountId::from([0; 32]);
+		assert_ok!(FellowshipCollective::do_add_member_to_rank(
+			account_fellow_rank3.clone(),
+			3,
+			false
+		));
+		// setup account
+		assert_ok!(Balances::mint_into(
+			&account_fellow_rank3,
+			ExistentialDeposit::get() + SubmissionDeposit::get()
+		));
+
+		// create DDay referendum
+		assert_ok!(DDayReferenda::submit(
+			RuntimeOrigin::signed(account_fellow_rank3),
+			Box::new(frame_support::dispatch::RawOrigin::Root.into()),
+			{
+				// random call executed when referendum passes
+				let c =
+					RuntimeCall::System(frame_system::Call::remark_with_event { remark: vec![] });
+				<Preimage as StorePreimage>::bound(c).unwrap()
+			},
+			DispatchTime::At(10),
+		));
+		assert_eq!(ReferendumCount::<Runtime, DDayReferendaInstance>::get(), 1);
+		let referenda_id = ReferendumCount::<Runtime, DDayReferendaInstance>::get() - 1;
+		assert!(ReferendumInfoFor::<Runtime, DDayReferendaInstance>::get(referenda_id).is_some());
+
+		// prepare sample proofs
+		let (asset_hub_header, proof, ss58_account, ..) = prover::tests::sample_proof();
+		let asset_hub_block_number = asset_hub_header.number;
+		let valid_asset_hub_account = AccountId::from_ss58check(ss58_account)
+			.expect("valid accountId");
+		let account_voting_power = prover::AssetHubAccountProver::query_voting_power_for(
+			&valid_asset_hub_account,
+			asset_hub_header.state_root,
+			proof.clone()
+		).expect("valid proof");
+
+		// store/sync AssetHub header with state root
+		assert_ok!(ProofsStorage::submit(
+			cumulus_pallet_xcm::Origin::SiblingParachain(
+				westend_runtime_constants::system_parachain::ASSET_HUB_ID.into()
+			)
+			.into(),
+			ProofsKey::AssetHubHeader(asset_hub_block_number),
+			ProofsValue::AssetHubHeader(
+				BoundedVec::try_from(asset_hub_header.encode()).expect("valid header")
+			)
+		));
+
+		// Err - vote by proof - random account cannot vote
+		let random_account_1 = AccountId::from([1; 32]);
+		let vote = AccountVote::Standard {
+			vote: Vote { aye: true, conviction: Conviction::Locked1x },
+			balance: 1,
+		};
+		assert_err!(
+			DDayVoting::vote(
+				RuntimeOrigin::signed(random_account_1),
+				referenda_id,
+				vote,
+				(asset_hub_block_number, proof.clone())
+			),
+			<pallet_proofs_voting::Error<Runtime, DDayVotingInstance>>::InvalidProof
+		);
+
+		// Err - when more vote.balance than proven voting power
+		assert_err!(
+			DDayVoting::vote(
+				RuntimeOrigin::signed(valid_asset_hub_account.clone()),
+				referenda_id,
+				AccountVote::Standard {
+					vote: Vote { aye: true, conviction: Conviction::Locked1x },
+					// more than proven
+					balance: account_voting_power.account_power + 1
+				},
+				(asset_hub_block_number, proof.clone())
+			),
+			<pallet_proofs_voting::Error<Runtime, DDayVotingInstance>>::InsufficientFunds
+		);
+
+		// Ok - vote by proof - generated for proving account `ss58_account`
+		assert_ok!(DDayVoting::vote(
+			RuntimeOrigin::signed(valid_asset_hub_account),
+			referenda_id,
+			AccountVote::Standard {
+				vote: Vote { aye: true, conviction: Conviction::Locked1x },
+				// ok
+				balance: account_voting_power.account_power
+			},
+			(asset_hub_block_number, proof)
+		));
+	})
 }

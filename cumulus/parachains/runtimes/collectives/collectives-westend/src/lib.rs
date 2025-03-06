@@ -37,6 +37,7 @@
 include!(concat!(env!("OUT_DIR"), "/wasm_binary.rs"));
 
 pub mod ambassador;
+pub mod dday;
 mod genesis_config_presets;
 pub mod impls;
 mod weights;
@@ -68,6 +69,8 @@ use sp_version::RuntimeVersion;
 
 use codec::{Decode, DecodeWithMemTracking, Encode, MaxEncodedLen};
 use cumulus_primitives_core::{AggregateMessageOrigin, ClaimQueueOffset, CoreSelector, ParaId};
+use frame_support::pallet_prelude::TypeInfo;
+use frame_support::traits::{AsEnsureOriginWithArg, Equals};
 use frame_support::{
 	construct_runtime, derive_impl,
 	dispatch::DispatchClass,
@@ -78,7 +81,7 @@ use frame_support::{
 		InstanceFilter, LinearStoragePrice, TransformOrigin,
 	},
 	weights::{ConstantMultiplier, Weight, WeightToFee as _},
-	PalletId,
+	BoundedVec, PalletId,
 };
 use frame_system::{
 	limits::{BlockLength, BlockWeights},
@@ -667,6 +670,45 @@ impl pallet_asset_rate::Config for Runtime {
 	type BenchmarkHelper = polkadot_runtime_common::impls::benchmarks::AssetRateArguments;
 }
 
+#[derive(
+	Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, MaxEncodedLen, PartialEq, TypeInfo,
+)]
+pub enum ProofsKey {
+	/// AssetHub header key, should be the same as `ProofBlockNumberOf<AssetHubAccountProver>`.
+	AssetHubHeader(parachains_common::BlockNumber),
+}
+
+#[derive(
+	Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, MaxEncodedLen, PartialEq, TypeInfo,
+)]
+pub enum ProofsValue {
+	/// AssetHub encoded header `parachains_common::Header`.
+	AssetHubHeader(BoundedVec<u8, ConstU32<4_096>>),
+}
+
+// Here the runtime stores AssetHub headers/state_roots.
+//
+// 1. AssetHub can send XCM with its para head data - e.g. from `on_idle`
+// 2. Or (until) we implement - custom keys reading from `RelayChainStateProof`
+//  - https://github.com/paritytech/polkadot-sdk/issues/82
+//  - https://github.com/paritytech/polkadot-sdk/issues/7445
+//
+// Note: I am going to use exactly the same pallet on the AssetHub for bridging purposes,
+// 		 to store/sync similar data from BridgeHub.
+//
+impl pallet_proofs_storage::Config for Runtime {
+	type RuntimeEvent = RuntimeEvent;
+	// TODO: FAIL-CI setup benchmarks
+	type WeightInfo = ();
+	// root or AssetHub can update proof
+	type SubmitOrigin = EitherOfDiverse<
+		EnsureRoot<AccountId>,
+		AsEnsureOriginWithArg<EnsureXcm<Equals<xcm_config::AssetHub>>>,
+	>;
+	type Key = ProofsKey;
+	type Value = ProofsValue;
+}
+
 // Create the runtime by composing the FRAME pallets that were previously configured.
 construct_runtime!(
 	pub enum Runtime
@@ -729,6 +771,13 @@ construct_runtime!(
 		AmbassadorCore: pallet_core_fellowship::<Instance2> = 73,
 		AmbassadorSalary: pallet_salary::<Instance2> = 74,
 		AmbassadorContent: pallet_collective_content::<Instance1> = 75,
+
+		// DDay feature.
+		DDayReferenda: pallet_referenda::<Instance3> = 81,
+		DDayVoting: pallet_proofs_voting::<Instance1> = 82,
+
+		// Storage of sibling parachain header or state roots.
+		ProofsStorage: pallet_proofs_storage = 83,
 
 		StateTrieMigration: pallet_state_trie_migration = 80,
 	}
@@ -819,6 +868,7 @@ mod benches {
 		[pallet_collective_content, AmbassadorContent]
 		[pallet_core_fellowship, AmbassadorCore]
 		[pallet_salary, AmbassadorSalary]
+		[pallet_referenda, DDayReferenda]
 		[pallet_treasury, FellowshipTreasury]
 		[pallet_asset_rate, AssetRate]
 		[cumulus_pallet_weight_reclaim, WeightReclaim]
