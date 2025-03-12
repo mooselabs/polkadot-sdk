@@ -63,7 +63,7 @@ use std::{
 	path::PathBuf,
 	process,
 	sync::{mpsc::channel, Arc},
-	time::Duration,
+	time::{Duration, Instant},
 };
 
 /// The number of threads for the child process:
@@ -309,6 +309,7 @@ fn validate_using_artifact(
 	executor_params: &ExecutorParams,
 	params: &[u8],
 ) -> JobResponse {
+	let start = Instant::now();
 	let descriptor_bytes = match unsafe {
 		// SAFETY: this should be safe since the compiled artifact passed here comes from the
 		//         file created by the prepare workers. These files are obtained by calling
@@ -330,7 +331,7 @@ fn validate_using_artifact(
 		Ok(r) => r,
 	};
 
-	JobResponse::Ok { result_descriptor }
+	JobResponse::Ok { result_descriptor, took_ns: start.elapsed().as_nanos() as u64 }
 }
 
 #[cfg(target_os = "linux")]

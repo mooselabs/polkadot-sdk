@@ -101,7 +101,7 @@ mod constants {
 	pub const AVERAGE_ON_INITIALIZE_RATIO: Perbill = Perbill::from_percent(5);
 	/// We allow `Normal` extrinsics to fill up the block up to 75%, the rest can be used by
 	/// Operational  extrinsics.
-	pub const NORMAL_DISPATCH_RATIO: Perbill = Perbill::from_percent(75);
+	pub const NORMAL_DISPATCH_RATIO: Perbill = Perbill::from_percent(95);
 
 	/// We allow for 0.5 seconds of compute with a 6 second average block time.
 	pub const MAXIMUM_BLOCK_WEIGHT: Weight = Weight::from_parts(

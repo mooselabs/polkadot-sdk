@@ -224,8 +224,8 @@ impl<T: frame_system::Config> pallet_assets::WeightInfo for WeightInfo<T> {
 		// Proof Size summary in bytes:
 		//  Measured:  `356`
 		//  Estimated: `7404`
-		// Minimum execution time: 46_370_000 picoseconds.
-		Weight::from_parts(47_956_000, 0)
+		// Minimum execution time: 39_913_000 picoseconds.
+		Weight::from_parts(0, 0)
 			.saturating_add(Weight::from_parts(0, 7404))
 			.saturating_add(T::DbWeight::get().reads(5))
 			.saturating_add(T::DbWeight::get().writes(4))

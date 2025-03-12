@@ -73,6 +73,7 @@ pub enum JobResponse {
 	Ok {
 		/// The result of parachain validation.
 		result_descriptor: ValidationResult,
+		took_ns: u64,
 	},
 	/// A possibly transient runtime instantiation error happened during the execution; may be
 	/// retried with re-preparation

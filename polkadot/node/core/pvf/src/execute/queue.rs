@@ -447,14 +447,17 @@ async fn handle_job_finish(
 		Ok(WorkerInterfaceResponse {
 			worker_response:
 				WorkerResponse {
-					job_response: JobResponse::Ok { result_descriptor },
+					job_response: JobResponse::Ok { result_descriptor, took_ns },
 					duration,
 					pov_size,
 				},
 			idle_worker,
 		}) => {
 			// TODO: propagate the soft timeout
-
+			let took_ms = took_ns / 1000 / 1000;
+			if took_ms > 100 {
+				gum::info!(target: LOG_TARGET, "job finished successfully {:}", took_ms);
+			}
 			(Some(idle_worker), Ok(result_descriptor), Some(duration), None, Some(pov_size))
 		},
 		Ok(WorkerInterfaceResponse {
