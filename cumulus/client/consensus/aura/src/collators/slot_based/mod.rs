@@ -38,6 +38,7 @@ use cumulus_primitives_aura::AuraUnincludedSegmentApi;
 use cumulus_primitives_core::{ClaimQueueOffset, CoreSelector, GetCoreSelectorApi};
 use cumulus_relay_chain_interface::RelayChainInterface;
 use futures::FutureExt;
+use polkadot_node_subsystem::messages::network_bridge_event::PeerId;
 use polkadot_primitives::{
 	vstaging::DEFAULT_CLAIM_QUEUE_OFFSET, CollatorPair, CoreIndex, Hash as RelayHash, Id as ParaId,
 	ValidationCodeHash,
@@ -99,6 +100,8 @@ pub struct Params<Block, BI, CIDP, Client, Backend, RClient, CHP, Proposer, CS, 
 	pub block_import_handle: SlotBasedBlockImportHandle<Block>,
 	/// Spawner for spawning futures.
 	pub spawner: Spawner,
+	/// TODO
+	pub peer_id: PeerId,
 }
 
 /// Run aura-based block building and collation task.
@@ -120,6 +123,7 @@ pub fn run<Block, P, BI, CIDP, Client, Backend, RClient, CHP, Proposer, CS, Spaw
 		slot_drift,
 		block_import_handle,
 		spawner,
+		peer_id,
 	}: Params<Block, BI, CIDP, Client, Backend, RClient, CHP, Proposer, CS, Spawner>,
 ) where
 	Block: BlockT,
@@ -174,6 +178,7 @@ pub fn run<Block, P, BI, CIDP, Client, Backend, RClient, CHP, Proposer, CS, Spaw
 		authoring_duration,
 		collator_sender: tx,
 		slot_drift,
+		peer_id,
 	};
 
 	let block_builder_fut =

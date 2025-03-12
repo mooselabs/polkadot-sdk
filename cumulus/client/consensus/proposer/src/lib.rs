@@ -23,6 +23,7 @@ use async_trait::async_trait;
 
 use cumulus_primitives_parachain_inherent::ParachainInherentData;
 use sp_consensus::{EnableProofRecording, Environment, Proposal, Proposer as SubstrateProposer};
+use sp_core::OpaquePeerId;
 use sp_inherents::InherentData;
 use sp_runtime::{traits::Block as BlockT, Digest};
 use sp_state_machine::StorageProof;
@@ -73,6 +74,7 @@ pub trait ProposerInterface<Block: BlockT> {
 		parent_header: &Block::Header,
 		paras_inherent_data: &ParachainInherentData,
 		other_inherent_data: InherentData,
+		maybe_approved_peer_inherent_data: Option<OpaquePeerId>,
 		inherent_digests: Digest,
 		max_duration: Duration,
 		block_size_limit: Option<usize>,
@@ -106,6 +108,7 @@ where
 		parent_header: &B::Header,
 		paras_inherent_data: &ParachainInherentData,
 		other_inherent_data: InherentData,
+		maybe_approved_peer_inherent_data: Option<OpaquePeerId>,
 		inherent_digests: Digest,
 		max_duration: Duration,
 		block_size_limit: Option<usize>,
@@ -123,6 +126,12 @@ where
 				&paras_inherent_data,
 			)
 			.map_err(|e| Error::proposing(anyhow::Error::new(e)))?;
+
+		if let Some(approved_peer) = maybe_approved_peer_inherent_data {
+			inherent_data
+				.put_data(*b"sysi1999", &approved_peer)
+				.map_err(|e| Error::proposing(anyhow::Error::new(e)))?;
+		}
 
 		proposer
 			.propose(inherent_data, inherent_digests, max_duration, block_size_limit)

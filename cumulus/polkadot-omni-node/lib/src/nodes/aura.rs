@@ -59,6 +59,7 @@ use sc_consensus::{
 	import_queue::{BasicQueue, Verifier as VerifierT},
 	BlockImportParams, DefaultImportQueue,
 };
+use sc_network::PeerId;
 use sc_service::{Configuration, Error, TaskManager};
 use sc_telemetry::TelemetryHandle;
 use sc_transaction_pool::TransactionPoolHandle;
@@ -321,6 +322,7 @@ where
 		backend: Arc<ParachainBackend<Block>>,
 		_node_extra_args: NodeExtraArgs,
 		block_import_handle: SlotBasedBlockImportHandle<Block>,
+		peer_id: PeerId,
 	) -> Result<(), Error> {
 		let proposer_factory = sc_basic_authorship::ProposerFactory::with_proof_recording(
 			task_manager.spawn_handle(),
@@ -358,6 +360,7 @@ where
 			slot_drift: Duration::from_secs(1),
 			block_import_handle,
 			spawner: task_manager.spawn_handle(),
+			peer_id,
 		};
 
 		// We have a separate function only to be able to use `docify::export` on this piece of
@@ -442,6 +445,7 @@ where
 		backend: Arc<ParachainBackend<Block>>,
 		node_extra_args: NodeExtraArgs,
 		_: (),
+		peer_id: PeerId,
 	) -> Result<(), Error> {
 		let proposer_factory = sc_basic_authorship::ProposerFactory::with_proof_recording(
 			task_manager.spawn_handle(),
@@ -481,6 +485,7 @@ where
 				collator_service,
 				authoring_duration: Duration::from_millis(2000),
 				reinitialize: false,
+				peer_id,
 			},
 		};
 

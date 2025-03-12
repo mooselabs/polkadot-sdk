@@ -226,13 +226,14 @@ where
 				continue
 			}
 
-			let (parachain_inherent_data, other_inherent_data) = try_request!(
+			let inherent_data = try_request!(
 				collator
 					.create_inherent_data(
 						*request.relay_parent(),
 						&validation_data,
 						parent_hash,
 						claim.timestamp(),
+						None
 					)
 					.await
 			);
@@ -253,7 +254,7 @@ where
 						&parent_header,
 						&claim,
 						None,
-						(parachain_inherent_data, other_inherent_data),
+						inherent_data,
 						params.authoring_duration,
 						allowed_pov_size,
 					)

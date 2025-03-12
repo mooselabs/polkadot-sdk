@@ -249,7 +249,7 @@ where
 		.take_while(|e| e.is_bare())
 		.filter_map(|e| e.call().is_sub_type())
 		.find_map(|c| match c {
-			crate::Call::set_validation_data { data: validation_data } => Some(validation_data),
+			crate::Call::set_validation_data { data: validation_data, .. } => Some(validation_data),
 			_ => None,
 		})
 		.expect("Could not find `set_validation_data` inherent")

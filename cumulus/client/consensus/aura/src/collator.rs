@@ -40,13 +40,14 @@ use polkadot_node_primitives::{Collation, MaybeCompressedPoV};
 use polkadot_primitives::{Header as PHeader, Id as ParaId};
 
 use futures::prelude::*;
+use polkadot_node_subsystem::messages::network_bridge_event::PeerId;
 use sc_consensus::{BlockImport, BlockImportParams, ForkChoiceStrategy, StateAction};
 use sc_consensus_aura::standalone as aura_internal;
 use sp_api::ProvideRuntimeApi;
 use sp_application_crypto::AppPublic;
 use sp_consensus::BlockOrigin;
 use sp_consensus_aura::{AuraApi, Slot, SlotDuration};
-use sp_core::crypto::Pair;
+use sp_core::{crypto::Pair, OpaquePeerId};
 use sp_inherents::{CreateInherentDataProviders, InherentData, InherentDataProvider};
 use sp_keystore::KeystorePtr;
 use sp_runtime::{
@@ -123,7 +124,11 @@ where
 		validation_data: &PersistedValidationData,
 		parent_hash: Block::Hash,
 		timestamp: impl Into<Option<Timestamp>>,
-	) -> Result<(ParachainInherentData, InherentData), Box<dyn Error + Send + Sync + 'static>> {
+		peer_id: Option<PeerId>,
+	) -> Result<
+		(ParachainInherentData, InherentData, Option<OpaquePeerId>),
+		Box<dyn Error + Send + Sync + 'static>,
+	> {
 		let paras_inherent_data = ParachainInherentDataProvider::create_at(
 			relay_parent,
 			&self.relay_client,
@@ -153,7 +158,11 @@ where
 			other_inherent_data.replace_data(sp_timestamp::INHERENT_IDENTIFIER, &timestamp);
 		}
 
-		Ok((paras_inherent_data, other_inherent_data))
+		Ok((
+			paras_inherent_data,
+			other_inherent_data,
+			peer_id.map(|id| OpaquePeerId(id.to_bytes())),
+		))
 	}
 
 	/// Build and import a parachain block on the given parent header, using the given slot claim.
@@ -162,7 +171,7 @@ where
 		parent_header: &Block::Header,
 		slot_claim: &SlotClaim<P::Public>,
 		additional_pre_digest: impl Into<Option<Vec<DigestItem>>>,
-		inherent_data: (ParachainInherentData, InherentData),
+		inherent_data: (ParachainInherentData, InherentData, Option<OpaquePeerId>),
 		proposal_duration: Duration,
 		max_pov_size: usize,
 	) -> Result<Option<ParachainCandidate<Block>>, Box<dyn Error + Send + 'static>> {
@@ -175,6 +184,7 @@ where
 				&parent_header,
 				&inherent_data.0,
 				inherent_data.1,
+				inherent_data.2,
 				Digest { logs: digest },
 				proposal_duration,
 				Some(max_pov_size),
@@ -225,7 +235,7 @@ where
 		parent_header: &Block::Header,
 		slot_claim: &SlotClaim<P::Public>,
 		additional_pre_digest: impl Into<Option<Vec<DigestItem>>>,
-		inherent_data: (ParachainInherentData, InherentData),
+		inherent_data: (ParachainInherentData, InherentData, Option<OpaquePeerId>),
 		proposal_duration: Duration,
 		max_pov_size: usize,
 	) -> Result<

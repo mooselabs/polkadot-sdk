@@ -40,7 +40,7 @@ use cumulus_primitives_core::{ClaimQueueOffset, CollectCollationInfo, PersistedV
 use cumulus_relay_chain_interface::RelayChainInterface;
 
 use polkadot_node_primitives::{PoV, SubmitCollationParams};
-use polkadot_node_subsystem::messages::CollationGenerationMessage;
+use polkadot_node_subsystem::messages::{network_bridge_event::PeerId, CollationGenerationMessage};
 use polkadot_overseer::Handle as OverseerHandle;
 use polkadot_primitives::{
 	vstaging::DEFAULT_CLAIM_QUEUE_OFFSET, BlockNumber as RBlockNumber, CollatorPair, Hash as RHash,
@@ -135,6 +135,8 @@ pub struct Params<BI, CIDP, Client, Backend, RClient, CHP, Proposer, CS> {
 	pub authoring_duration: Duration,
 	/// Whether we should reinitialize the collator config (i.e. we are transitioning to aura).
 	pub reinitialize: bool,
+	/// TODO
+	pub peer_id: PeerId,
 }
 
 /// Run async-backing-friendly Aura.
@@ -383,12 +385,13 @@ where
 
 				// Build and announce collations recursively until
 				// `can_build_upon` fails or building a collation fails.
-				let (parachain_inherent_data, other_inherent_data) = match collator
+				let inherent_data = match collator
 					.create_inherent_data(
 						relay_parent,
 						&validation_data,
 						parent_hash,
 						slot_claim.timestamp(),
+						Some(params.peer_id),
 					)
 					.await
 				{
@@ -429,7 +432,7 @@ where
 						&parent_header,
 						&slot_claim,
 						None,
-						(parachain_inherent_data, other_inherent_data),
+						inherent_data,
 						params.authoring_duration,
 						allowed_pov_size,
 					)

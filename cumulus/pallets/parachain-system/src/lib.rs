@@ -55,7 +55,7 @@ use frame_system::{ensure_none, ensure_root, pallet_prelude::HeaderFor};
 use polkadot_parachain_primitives::primitives::RelayChainBlockNumber;
 use polkadot_runtime_parachains::FeeTracker;
 use scale_info::TypeInfo;
-use sp_core::U256;
+use sp_core::{OpaquePeerId, U256};
 use sp_runtime::{
 	traits::{Block as BlockT, BlockNumberProvider, Hash, One},
 	BoundedSlice, FixedU128, RuntimeDebug, Saturating,
@@ -397,8 +397,7 @@ pub mod pallet {
 
 				// Send the core selector UMP signal. This is experimental until relay chain
 				// validators are upgraded to handle ump signals.
-				#[cfg(feature = "experimental-ump-signals")]
-				Self::send_ump_signal();
+				Self::send_ump_signals(<ApprovedPeer<T>>::get());
 
 				// If the total size of the pending messages is less than the threshold,
 				// we decrease the fee factor, since the queue is less congested.
@@ -507,6 +506,7 @@ pub mod pallet {
 
 			// Remove the validation from the old block.
 			ValidationData::<T>::kill();
+			ApprovedPeer::<T>::kill();
 			ProcessedDownwardMessages::<T>::kill();
 			HrmpWatermark::<T>::kill();
 			UpwardMessages::<T>::kill();
@@ -576,11 +576,16 @@ pub mod pallet {
 		pub fn set_validation_data(
 			origin: OriginFor<T>,
 			data: ParachainInherentData,
+			maybe_approved_peer: Option<OpaquePeerId>,
 		) -> DispatchResult {
 			ensure_none(origin)?;
 			assert!(
 				!<ValidationData<T>>::exists(),
 				"ValidationData must be updated only once in a block",
+			);
+			assert!(
+				!<ApprovedPeer<T>>::exists(),
+				"ApprovedPeer must be updated only once in a block",
 			);
 
 			// TODO: This is more than zero, but will need benchmarking to figure out what.
@@ -680,6 +685,9 @@ pub mod pallet {
 				.read_messaging_state_snapshot(&host_config)
 				.expect("Invalid messaging state in relay chain state proof");
 
+			if let Some(approved_peer) = maybe_approved_peer {
+				<ApprovedPeer<T>>::put(&approved_peer);
+			}
 			<ValidationData<T>>::put(&vfp);
 			<RelayStateProof<T>>::put(relay_chain_state);
 			<RelevantMessagingState<T>>::put(relevant_messaging_state.clone());
@@ -796,6 +804,10 @@ pub mod pallet {
 	/// in the trie.
 	#[pallet::storage]
 	pub type ValidationData<T: Config> = StorageValue<_, PersistedValidationData>;
+
+	/// TODO
+	#[pallet::storage]
+	pub type ApprovedPeer<T: Config> = StorageValue<_, OpaquePeerId>;
 
 	/// Were the validation data set to notify the relay chain?
 	#[pallet::storage]
@@ -941,6 +953,9 @@ pub mod pallet {
 			cumulus_primitives_parachain_inherent::INHERENT_IDENTIFIER;
 
 		fn create_inherent(data: &InherentData) -> Option<Self::Call> {
+			let maybe_approved_peer: Option<OpaquePeerId> =
+				data.get_data(&*b"sysi1999").ok().flatten();
+
 			let mut data: ParachainInherentData =
 				data.get_data(&Self::INHERENT_IDENTIFIER).ok().flatten().expect(
 					"validation function params are always injected into inherent data; qed",
@@ -948,7 +963,7 @@ pub mod pallet {
 
 			Self::drop_processed_messages_from_inherent(&mut data);
 
-			Some(Call::set_validation_data { data })
+			Some(Call::set_validation_data { data, maybe_approved_peer })
 		}
 
 		fn is_inherent(call: &Self::Call) -> bool {
@@ -1460,17 +1475,31 @@ impl<T: Config> Pallet<T> {
 	}
 
 	/// Send the ump signals
-	#[cfg(feature = "experimental-ump-signals")]
-	fn send_ump_signal() {
+	fn send_ump_signals(maybe_approved_peer: Option<OpaquePeerId>) {
 		use cumulus_primitives_core::relay_chain::vstaging::{UMPSignal, UMP_SEPARATOR};
+		let mut added_separator = false;
 
-		UpwardMessages::<T>::mutate(|up| {
-			up.push(UMP_SEPARATOR);
+		#[cfg(feature = "experimental-ump-signals")]
+		{
+			added_separator = true;
+			UpwardMessages::<T>::mutate(|up| {
+				up.push(UMP_SEPARATOR);
 
-			// Send the core selector signal.
-			let core_selector = T::SelectCore::selected_core();
-			up.push(UMPSignal::SelectCore(core_selector.0, core_selector.1).encode());
-		});
+				// Send the core selector signal.
+				let core_selector = T::SelectCore::selected_core();
+				up.push(UMPSignal::SelectCore(core_selector.0, core_selector.1).encode());
+			});
+		}
+
+		if let Some(peer_id) = maybe_approved_peer {
+			UpwardMessages::<T>::mutate(|up| {
+				if !added_separator {
+					up.push(UMP_SEPARATOR);
+				}
+
+				up.push(UMPSignal::ApprovedPeer(peer_id).encode());
+			});
+		}
 	}
 
 	/// Open HRMP channel for using it in benchmarks or tests.

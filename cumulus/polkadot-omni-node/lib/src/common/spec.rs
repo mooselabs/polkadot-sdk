@@ -37,7 +37,7 @@ use prometheus_endpoint::Registry;
 use sc_client_api::Backend;
 use sc_consensus::DefaultImportQueue;
 use sc_executor::{HeapAllocStrategy, DEFAULT_HEAP_ALLOC_STRATEGY};
-use sc_network::{config::FullNetworkConfiguration, NetworkBackend, NetworkBlock};
+use sc_network::{config::FullNetworkConfiguration, NetworkBackend, NetworkBlock, PeerId};
 use sc_service::{Configuration, ImportQueue, PartialComponents, TaskManager};
 use sc_sysinfo::HwBench;
 use sc_telemetry::{TelemetryHandle, TelemetryWorker};
@@ -45,7 +45,7 @@ use sc_tracing::tracing::Instrument;
 use sc_transaction_pool::TransactionPoolHandle;
 use sc_transaction_pool_api::OffchainTransactionPoolFactory;
 use sp_keystore::KeystorePtr;
-use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
+use std::{future::Future, pin::Pin, str::FromStr, sync::Arc, time::Duration};
 
 pub(crate) trait BuildImportQueue<
 	Block: BlockT,
@@ -83,6 +83,7 @@ where
 		backend: Arc<ParachainBackend<Block>>,
 		node_extra_args: NodeExtraArgs,
 		block_import_extra_return_value: BIAuxiliaryData,
+		peer_id: PeerId,
 	) -> Result<(), sc_service::Error>;
 }
 
@@ -401,6 +402,7 @@ pub(crate) trait NodeSpec: BaseNodeSpec {
 			})?;
 
 			if validator {
+				let peer_id = network.network_state().await.unwrap().peer_id;
 				Self::StartConsensus::start_consensus(
 					client.clone(),
 					block_import,
@@ -418,6 +420,7 @@ pub(crate) trait NodeSpec: BaseNodeSpec {
 					backend.clone(),
 					node_extra_args,
 					block_import_auxiliary_data,
+					PeerId::from_str(peer_id.as_str()).unwrap(),
 				)?;
 			}
 

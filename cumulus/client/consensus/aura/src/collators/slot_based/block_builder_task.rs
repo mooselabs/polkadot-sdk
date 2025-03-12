@@ -23,6 +23,7 @@ use cumulus_primitives_aura::AuraUnincludedSegmentApi;
 use cumulus_primitives_core::{GetCoreSelectorApi, PersistedValidationData};
 use cumulus_relay_chain_interface::RelayChainInterface;
 
+use polkadot_node_subsystem::messages::network_bridge_event::PeerId;
 use polkadot_primitives::{Block as RelayBlock, Id as ParaId};
 
 use futures::prelude::*;
@@ -97,6 +98,8 @@ pub struct BuilderTaskParams<
 	/// likelihood of encountering unfavorable notification arrival timings (i.e. we don't want to
 	/// wait for relay chain notifications because we woke up too early).
 	pub slot_drift: Duration,
+	/// TODO
+	pub peer_id: PeerId,
 }
 
 #[derive(Debug)]
@@ -202,6 +205,7 @@ where
 			authoring_duration,
 			para_backend,
 			slot_drift,
+			peer_id,
 		} = params;
 
 		let slot_timer = SlotTimer::<_, _, P>::new_with_drift(para_client.clone(), slot_drift);
@@ -355,12 +359,13 @@ where
 				max_pov_size: *max_pov_size,
 			};
 
-			let (parachain_inherent_data, other_inherent_data) = match collator
+			let inherent_data = match collator
 				.create_inherent_data(
 					relay_parent,
 					&validation_data,
 					parent_hash,
 					slot_claim.timestamp(),
+					Some(peer_id),
 				)
 				.await
 			{
@@ -402,7 +407,7 @@ where
 					&parent_header,
 					&slot_claim,
 					None,
-					(parachain_inherent_data, other_inherent_data),
+					inherent_data,
 					authoring_duration,
 					allowed_pov_size,
 				)
