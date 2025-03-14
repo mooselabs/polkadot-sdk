@@ -18,7 +18,7 @@
 use crate::{
 	address::AddressMapper,
 	benchmarking::{default_deposit_limit, Contract, WasmModule},
-	exec::{ExportedFunction, Ext, Key, Stack},
+	exec::{ExportedFunction, Key, PrecompileExt, Stack},
 	storage::meter::Meter,
 	transient_storage::MeterEntry,
 	wasm::{PreparedCall, Runtime},

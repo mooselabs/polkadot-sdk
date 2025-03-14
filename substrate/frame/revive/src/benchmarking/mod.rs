@@ -24,7 +24,7 @@ mod code;
 use self::{call_builder::CallSetup, code::WasmModule};
 use crate::{
 	evm::runtime::GAS_PRICE,
-	exec::{Ext, Key, MomentOf},
+	exec::{Key, MomentOf, PrecompileExt},
 	limits,
 	pure_precompiles::Precompile,
 	storage::WriteOutcome,

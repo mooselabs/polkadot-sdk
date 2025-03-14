@@ -19,6 +19,7 @@ use crate::{
 	address::{self, AddressMapper},
 	gas::GasMeter,
 	limits,
+	precompiles::{self, All as AllPrecompiles, Kind as PrecompileKind, Precompiles},
 	primitives::{ExecReturnValue, StorageDeposit},
 	pure_precompiles::{self, is_precompile},
 	runtime_decl_for_revive_api::{Decode, Encode, RuntimeDebugNoBound, TypeInfo},
@@ -184,32 +185,7 @@ impl<T: Config> Origin<T> {
 	}
 }
 
-/// An interface that provides access to the external environment in which the
-/// smart-contract is executed.
-///
-/// This interface is specialized to an account of the executing code, so all
-/// operations are implicitly performed on that account.
-///
-/// # Note
-///
-/// This trait is sealed and cannot be implemented by downstream crates.
-pub trait Ext: sealing::Sealed {
-	type T: Config;
-
-	/// Call (possibly transferring some amount of funds) into the specified account.
-	///
-	/// Returns the code size of the called contract.
-	fn call(
-		&mut self,
-		gas_limit: Weight,
-		deposit_limit: U256,
-		to: &H160,
-		value: U256,
-		input_data: Vec<u8>,
-		allows_reentry: bool,
-		read_only: bool,
-	) -> Result<(), ExecError>;
-
+pub trait Ext: PrecompileWithInfoExt {
 	/// Execute code in the current frame.
 	///
 	/// Returns the code size of the called contract.
@@ -221,21 +197,6 @@ pub trait Ext: sealing::Sealed {
 		input_data: Vec<u8>,
 	) -> Result<(), ExecError>;
 
-	/// Instantiate a contract from the given code.
-	///
-	/// Returns the original code size of the called contract.
-	/// The newly created account will be associated with `code`. `value` specifies the amount of
-	/// value transferred from the caller to the newly created account.
-	fn instantiate(
-		&mut self,
-		gas_limit: Weight,
-		deposit_limit: U256,
-		code: H256,
-		value: U256,
-		input_data: Vec<u8>,
-		salt: Option<&[u8; 32]>,
-	) -> Result<H160, ExecError>;
-
 	/// Transfer all funds to `beneficiary` and delete the contract.
 	///
 	/// Since this function removes the self contract eagerly, if succeeded, no further actions
@@ -245,6 +206,35 @@ pub trait Ext: sealing::Sealed {
 	/// call stack.
 	fn terminate(&mut self, beneficiary: &H160) -> DispatchResult;
 
+	/// Returns the code hash of the contract being executed.
+	fn own_code_hash(&mut self) -> &H256;
+
+	/// Sets new code hash and immutable data for an existing contract.
+	fn set_code_hash(&mut self, hash: H256) -> DispatchResult;
+
+	/// Get the length of the immutable data.
+	///
+	/// This query is free as it does not need to load the immutable data from storage.
+	/// Useful when we need a constant time lookup of the length.
+	fn immutable_data_len(&mut self) -> u32;
+
+	/// Returns the immutable data of the current contract.
+	///
+	/// Returns `Err(InvalidImmutableAccess)` if called from a constructor.
+	fn get_immutable_data(&mut self) -> Result<ImmutableData, DispatchError>;
+
+	/// Set the immutable data of the current contract.
+	///
+	/// Returns `Err(InvalidImmutableAccess)` if not called from a constructor.
+	///
+	/// Note: Requires &mut self to access the contract info.
+	fn set_immutable_data(&mut self, data: ImmutableData) -> Result<(), DispatchError>;
+
+	/// Call some dispatchable and return the result.
+	fn call_runtime(&self, call: <Self::T as Config>::RuntimeCall) -> DispatchResultWithPostInfo;
+}
+
+pub trait PrecompileWithInfoExt: PrecompileExt {
 	/// Returns the storage entry of the executing account by the given `key`.
 	///
 	/// Returns `None` if the `key` wasn't previously set by `set_storage` or
@@ -265,6 +255,51 @@ pub trait Ext: sealing::Sealed {
 		value: Option<Vec<u8>>,
 		take_old: bool,
 	) -> Result<WriteOutcome, DispatchError>;
+
+	/// Charges `diff` from the meter.
+	fn charge_storage(&mut self, diff: &Diff);
+}
+
+/// An interface that provides access to the external environment in which the
+/// smart-contract is executed.
+///
+/// This interface is specialized to an account of the executing code, so all
+/// operations are implicitly performed on that account.
+///
+/// # Note
+///
+/// This trait is sealed and cannot be implemented by downstream crates.
+pub trait PrecompileExt: sealing::Sealed {
+	type T: Config;
+
+	/// Call (possibly transferring some amount of funds) into the specified account.
+	///
+	/// Returns the code size of the called contract.
+	fn call(
+		&mut self,
+		gas_limit: Weight,
+		deposit_limit: U256,
+		to: &H160,
+		value: U256,
+		input_data: Vec<u8>,
+		allows_reentry: bool,
+		read_only: bool,
+	) -> Result<(), ExecError>;
+
+	/// Instantiate a contract from the given code.
+	///
+	/// Returns the original code size of the called contract.
+	/// The newly created account will be associated with `code`. `value` specifies the amount of
+	/// value transferred from the caller to the newly created account.
+	fn instantiate(
+		&mut self,
+		gas_limit: Weight,
+		deposit_limit: U256,
+		code: H256,
+		value: U256,
+		input_data: Vec<u8>,
+		salt: Option<&[u8; 32]>,
+	) -> Result<H160, ExecError>;
 
 	/// Returns the transient storage entry of the executing account for the given `key`.
 	///
@@ -306,9 +341,6 @@ pub trait Ext: sealing::Sealed {
 	/// Returns the code size of the contract at the given `address` or zero.
 	fn code_size(&self, address: &H160) -> u64;
 
-	/// Returns the code hash of the contract being executed.
-	fn own_code_hash(&mut self) -> &H256;
-
 	/// Check if the caller of the current contract is the origin of the whole call stack.
 	///
 	/// This can be checked with `is_contract(self.caller())` as well.
@@ -325,24 +357,6 @@ pub trait Ext: sealing::Sealed {
 	fn address(&self) -> H160 {
 		<Self::T as Config>::AddressMapper::to_address(self.account_id())
 	}
-
-	/// Get the length of the immutable data.
-	///
-	/// This query is free as it does not need to load the immutable data from storage.
-	/// Useful when we need a constant time lookup of the length.
-	fn immutable_data_len(&mut self) -> u32;
-
-	/// Returns the immutable data of the current contract.
-	///
-	/// Returns `Err(InvalidImmutableAccess)` if called from a constructor.
-	fn get_immutable_data(&mut self) -> Result<ImmutableData, DispatchError>;
-
-	/// Set the immutable data of the current contract.
-	///
-	/// Returns `Err(InvalidImmutableAccess)` if not called from a constructor.
-	///
-	/// Note: Requires &mut self to access the contract info.
-	fn set_immutable_data(&mut self, data: ImmutableData) -> Result<(), DispatchError>;
 
 	/// Returns the balance of the current contract.
 	///
@@ -390,12 +404,6 @@ pub trait Ext: sealing::Sealed {
 	/// Get a mutable reference to the nested gas meter.
 	fn gas_meter_mut(&mut self) -> &mut GasMeter<Self::T>;
 
-	/// Charges `diff` from the meter.
-	fn charge_storage(&mut self, diff: &Diff);
-
-	/// Call some dispatchable and return the result.
-	fn call_runtime(&self, call: <Self::T as Config>::RuntimeCall) -> DispatchResultWithPostInfo;
-
 	/// Recovers ECDSA compressed public key based on signature and message hash.
 	fn ecdsa_recover(&self, signature: &[u8; 65], message_hash: &[u8; 32]) -> Result<[u8; 33], ()>;
 
@@ -414,9 +422,6 @@ pub trait Ext: sealing::Sealed {
 	/// storage directly.
 	#[cfg(feature = "runtime-benchmarks")]
 	fn transient_storage(&mut self) -> &mut TransientStorage<Self::T>;
-
-	/// Sets new code hash and immutable data for an existing contract.
-	fn set_code_hash(&mut self, hash: H256) -> DispatchResult;
 
 	/// Check if running in read-only context.
 	fn is_read_only(&self) -> bool;
@@ -558,14 +563,19 @@ struct DelegateInfo<T: Config> {
 	pub callee: H160,
 }
 
-/// Used in a delegate call frame arguments in order to override the executable and caller.
-struct DelegatedCall<T: Config, E> {
-	/// The executable which is run instead of the contracts own `executable`.
-	executable: E,
-	/// The caller of the contract.
-	caller: Origin<T>,
-	/// The address of the contract the call was delegated to.
-	callee: H160,
+enum ExecutableOrPrecompile<T: Config, E: Executable<T>> {
+	Executable(E),
+	Precompile { address: H160, kind: precompiles::Kind, _phantom: PhantomData<T> },
+}
+
+impl<T: Config, E: Executable<T>> ExecutableOrPrecompile<T, E> {
+	fn as_executable(&self) -> Option<&E> {
+		if let Self::Executable(executable) = self {
+			Some(executable)
+		} else {
+			None
+		}
+	}
 }
 
 /// Parameter passed in when creating a new `Frame`.
@@ -580,7 +590,7 @@ enum FrameArgs<'a, T: Config, E> {
 		/// This frame was created by `seal_delegate_call` and hence uses different code than
 		/// what is stored at [`Self::Call::dest`]. Its caller ([`DelegatedCall::caller`]) is the
 		/// account which called the caller contract
-		delegated_call: Option<DelegatedCall<T, E>>,
+		delegated_call: Option<DelegateInfo<T>>,
 	},
 	Instantiate {
 		/// The contract or signed origin which instantiates the new contract.
@@ -831,7 +841,7 @@ where
 		storage_meter: &'a mut storage::meter::Meter<T>,
 		value: U256,
 		skip_transfer: bool,
-	) -> Result<Option<(Self, E)>, ExecError> {
+	) -> Result<Option<(Self, ExecutableOrPrecompile<T, E>)>, ExecError> {
 		origin.ensure_mapped()?;
 		let Some((first_frame, executable)) = Self::new_frame(
 			args,
@@ -876,32 +886,70 @@ where
 		deposit_limit: BalanceOf<T>,
 		read_only: bool,
 		origin_is_caller: bool,
-	) -> Result<Option<(Frame<T>, E)>, ExecError> {
+	) -> Result<Option<(Frame<T>, ExecutableOrPrecompile<T, E>)>, ExecError> {
 		let (account_id, contract_info, executable, delegate, entry_point, nested_gas) =
 			match frame_args {
 				FrameArgs::Call { dest, cached_info, delegated_call } => {
-					let contract = if let Some(contract) = cached_info {
-						contract
-					} else {
-						if let Some(contract) =
-							<ContractInfoOf<T>>::get(T::AddressMapper::to_address(&dest))
-						{
-							contract
-						} else {
-							return Ok(None);
-						}
+					let address = T::AddressMapper::to_address(&dest);
+					let precompile_kind = <AllPrecompiles<T>>::kind(address.as_fixed_bytes());
+
+					let mut contract = match (cached_info, &precompile_kind) {
+						(Some(info), _) => CachedContract::Cached(info),
+						(None, None) =>
+							if let Some(info) = <ContractInfoOf<T>>::get(&address) {
+								CachedContract::Cached(info)
+							} else {
+								return Ok(None)
+							},
+						(None, Some(PrecompileKind::WithContractInfo)) => {
+							if let Some(info) = <ContractInfoOf<T>>::get(&address) {
+								CachedContract::Cached(info)
+							} else {
+								let info = ContractInfo::new(&address, 0u32.into(), H256::zero())?;
+								CachedContract::Cached(info)
+							}
+						},
+						(None, Some(PrecompileKind::NoContractInfo)) => CachedContract::Invalidated,
 					};
 
 					let mut nested_gas = gas_meter.nested(gas_limit);
-					let (executable, delegate_caller) = if let Some(DelegatedCall {
-						executable,
-						caller,
-						callee,
-					}) = delegated_call
-					{
-						(executable, Some(DelegateInfo { caller, callee }))
-					} else {
-						(E::from_storage(contract.code_hash, &mut nested_gas)?, None)
+
+					let (executable, delegate_caller) = match (precompile_kind, delegated_call) {
+						(None, Some(delegate_info)) => {
+							let Some(info) = ContractInfoOf::<T>::get(&delegate_info.callee) else {
+								return Ok(None);
+							};
+							let executable = E::from_storage(info.code_hash, &mut nested_gas)?;
+							(ExecutableOrPrecompile::Executable(executable), Some(delegate_info))
+						},
+						(None, None) => (
+							ExecutableOrPrecompile::Executable(E::from_storage(
+								contract
+									.as_contract()
+									.expect(
+										"When not a precompile the contract was loaded above; qed",
+									)
+									.code_hash,
+								&mut nested_gas,
+							)?),
+							None,
+						),
+						(Some(kind), Some(delegate_info)) => (
+							ExecutableOrPrecompile::Precompile {
+								address: delegate_info.callee,
+								kind,
+								_phantom: Default::default(),
+							},
+							Some(delegate_info),
+						),
+						(Some(kind), None) => (
+							ExecutableOrPrecompile::Precompile {
+								address,
+								kind,
+								_phantom: Default::default(),
+							},
+							None,
+						),
 					};
 
 					(
@@ -938,8 +986,8 @@ where
 					)?;
 					(
 						T::AddressMapper::to_fallback_account_id(&address),
-						contract,
-						executable,
+						CachedContract::Cached(contract),
+						ExecutableOrPrecompile::Executable(executable),
 						None,
 						ExportedFunction::Constructor,
 						gas_meter.nested(gas_limit),
@@ -950,7 +998,7 @@ where
 		let frame = Frame {
 			delegate,
 			value_transferred,
-			contract_info: CachedContract::Cached(contract_info),
+			contract_info,
 			account_id,
 			entry_point,
 			nested_gas,
@@ -971,7 +1019,7 @@ where
 		gas_limit: Weight,
 		deposit_limit: BalanceOf<T>,
 		read_only: bool,
-	) -> Result<Option<E>, ExecError> {
+	) -> Result<Option<ExecutableOrPrecompile<T, E>>, ExecError> {
 		if self.frames.len() as u32 == limits::CALL_STACK_DEPTH {
 			return Err(Error::<T>::MaxCallDepthReached.into());
 		}
@@ -1013,11 +1061,13 @@ where
 	/// Run the current (top) frame.
 	///
 	/// This can be either a call or an instantiate.
-	fn run(&mut self, executable: E, input_data: Vec<u8>) -> Result<(), ExecError> {
+	fn run(
+		&mut self,
+		executable: ExecutableOrPrecompile<T, E>,
+		input_data: Vec<u8>,
+	) -> Result<(), ExecError> {
 		let frame = self.top_frame();
 		let entry_point = frame.entry_point;
-		let delegated_code_hash =
-			if frame.delegate.is_some() { Some(*executable.code_hash()) } else { None };
 
 		if_tracing(|tracer| {
 			tracer.enter_child_span(
@@ -1076,13 +1126,18 @@ where
 				<System<T>>::inc_account_nonce(caller.account_id()?);
 
 				// The incremented refcount should be visible to the constructor.
-				<CodeInfo<T>>::increment_refcount(*executable.code_hash())?;
+				<CodeInfo<T>>::increment_refcount(
+					*executable
+						.as_executable()
+						.expect("Precompiles cannot be instantiated; qed")
+						.code_hash(),
+				)?;
 			}
 
 			// Every non delegate call or instantiate also optionally transfers the balance.
 			// If it is a delegate call, then we've already transferred tokens in the
 			// last non-delegate frame.
-			if delegated_code_hash.is_none() {
+			if !frame.delegate.is_some() {
 				Self::transfer_from_origin(
 					&self.origin,
 					&caller,
@@ -1091,10 +1146,24 @@ where
 				)?;
 			}
 
-			let code_deposit = executable.code_info().deposit();
-			let output = executable
-				.execute(self, entry_point, input_data)
-				.map_err(|e| ExecError { error: e.error, origin: ErrorOrigin::Callee })?;
+			let code_deposit = executable
+				.as_executable()
+				.map(|exec| exec.code_info().deposit())
+				.unwrap_or_default();
+
+			let output = match executable {
+				ExecutableOrPrecompile::Executable(executable) =>
+					executable.execute(self, entry_point, input_data),
+				ExecutableOrPrecompile::Precompile { address, .. } => AllPrecompiles::call(
+					address.as_fixed_bytes(),
+					input_data.as_ref(),
+					self,
+				)
+				.expect(
+					"The executable is only set to Precompile if one exists at this address; qed",
+				),
+			}
+			.map_err(|e| ExecError { error: e.error, origin: ErrorOrigin::Callee })?;
 
 			// Avoid useless work that would be reverted anyways.
 			if output.did_revert() {
@@ -1457,6 +1526,194 @@ where
 	MomentOf<T>: Into<U256>,
 	T::Hash: frame_support::traits::IsType<H256>,
 {
+	fn delegate_call(
+		&mut self,
+		gas_limit: Weight,
+		deposit_limit: U256,
+		address: H160,
+		input_data: Vec<u8>,
+	) -> Result<(), ExecError> {
+		if is_precompile(&address) {
+			return self.run_precompile(
+				address,
+				true,
+				self.is_read_only(),
+				0u32.into(),
+				&input_data,
+			);
+		}
+
+		// We reset the return data now, so it is cleared out even if no new frame was executed.
+		// This is for example the case for unknown code hashes or creating the frame fails.
+		*self.last_frame_output_mut() = Default::default();
+
+		let top_frame = self.top_frame_mut();
+		let contract_info = top_frame.contract_info().clone();
+		let account_id = top_frame.account_id.clone();
+		let value = top_frame.value_transferred;
+		if let Some(executable) = self.push_frame(
+			FrameArgs::Call {
+				dest: account_id,
+				cached_info: Some(contract_info),
+				delegated_call: Some(DelegateInfo {
+					caller: self.caller().clone(),
+					callee: address,
+				}),
+			},
+			value,
+			gas_limit,
+			deposit_limit.saturated_into::<BalanceOf<T>>(),
+			self.is_read_only(),
+		)? {
+			self.run(executable, input_data)
+		} else {
+			// Delegate-calls to non-contract accounts are considered success.
+			Ok(())
+		}
+	}
+
+	fn terminate(&mut self, beneficiary: &H160) -> DispatchResult {
+		if self.is_recursive() {
+			return Err(Error::<T>::TerminatedWhileReentrant.into());
+		}
+		let frame = self.top_frame_mut();
+		if frame.entry_point == ExportedFunction::Constructor {
+			return Err(Error::<T>::TerminatedInConstructor.into());
+		}
+		let info = frame.terminate();
+		let beneficiary_account = T::AddressMapper::to_account_id(beneficiary);
+		frame.nested_storage.terminate(&info, beneficiary_account);
+
+		info.queue_trie_for_deletion();
+		let account_address = T::AddressMapper::to_address(&frame.account_id);
+		ContractInfoOf::<T>::remove(&account_address);
+		ImmutableDataOf::<T>::remove(&account_address);
+		<CodeInfo<T>>::decrement_refcount(info.code_hash)?;
+
+		Ok(())
+	}
+
+	fn own_code_hash(&mut self) -> &H256 {
+		&self.top_frame_mut().contract_info().code_hash
+	}
+
+	/// TODO: This should be changed to run the constructor of the supplied `hash`.
+	///
+	/// Because the immutable data is attached to a contract and not a code,
+	/// we need to update the immutable data too.
+	///
+	/// Otherwise we open a massive footgun:
+	/// If the immutables changed in the new code, the contract will brick.
+	///
+	/// A possible implementation strategy is to add a flag to `FrameArgs::Instantiate`,
+	/// so that `fn run()` will roll back any changes if this flag is set.
+	///
+	/// After running the constructor, the new immutable data is already stored in
+	/// `self.immutable_data` at the address of the (reverted) contract instantiation.
+	///
+	/// The `set_code_hash` contract API stays disabled until this change is implemented.
+	fn set_code_hash(&mut self, hash: H256) -> DispatchResult {
+		let frame = top_frame_mut!(self);
+
+		let info = frame.contract_info();
+
+		let prev_hash = info.code_hash;
+		info.code_hash = hash;
+
+		let code_info = CodeInfoOf::<T>::get(hash).ok_or(Error::<T>::CodeNotFound)?;
+
+		let old_base_deposit = info.storage_base_deposit();
+		let new_base_deposit = info.update_base_deposit(code_info.deposit());
+		let deposit = StorageDeposit::Charge(new_base_deposit)
+			.saturating_sub(&StorageDeposit::Charge(old_base_deposit));
+
+		frame.nested_storage.charge_deposit(frame.account_id.clone(), deposit);
+
+		<CodeInfo<T>>::increment_refcount(hash)?;
+		<CodeInfo<T>>::decrement_refcount(prev_hash)?;
+		Ok(())
+	}
+
+	fn call_runtime(&self, call: <Self::T as Config>::RuntimeCall) -> DispatchResultWithPostInfo {
+		let mut origin: T::RuntimeOrigin = RawOrigin::Signed(self.account_id().clone()).into();
+		origin.add_filter(T::CallFilter::contains);
+		call.dispatch(origin)
+	}
+
+	fn immutable_data_len(&mut self) -> u32 {
+		self.top_frame_mut().contract_info().immutable_data_len()
+	}
+
+	fn get_immutable_data(&mut self) -> Result<ImmutableData, DispatchError> {
+		if self.top_frame().entry_point == ExportedFunction::Constructor {
+			return Err(Error::<T>::InvalidImmutableAccess.into());
+		}
+
+		// Immutable is read from contract code being executed
+		let address = self
+			.top_frame()
+			.delegate
+			.as_ref()
+			.map(|d| d.callee)
+			.unwrap_or(T::AddressMapper::to_address(self.account_id()));
+		Ok(<ImmutableDataOf<T>>::get(address).ok_or_else(|| Error::<T>::InvalidImmutableAccess)?)
+	}
+
+	fn set_immutable_data(&mut self, data: ImmutableData) -> Result<(), DispatchError> {
+		let frame = self.top_frame_mut();
+		if frame.entry_point == ExportedFunction::Call || data.is_empty() {
+			return Err(Error::<T>::InvalidImmutableAccess.into());
+		}
+		frame.contract_info().set_immutable_data_len(data.len() as u32);
+		<ImmutableDataOf<T>>::insert(T::AddressMapper::to_address(&frame.account_id), &data);
+		Ok(())
+	}
+}
+
+impl<'a, T, E> PrecompileWithInfoExt for Stack<'a, T, E>
+where
+	T: Config,
+	E: Executable<T>,
+	BalanceOf<T>: Into<U256> + TryFrom<U256>,
+	MomentOf<T>: Into<U256>,
+	T::Hash: frame_support::traits::IsType<H256>,
+{
+	fn get_storage(&mut self, key: &Key) -> Option<Vec<u8>> {
+		self.top_frame_mut().contract_info().read(key)
+	}
+
+	fn get_storage_size(&mut self, key: &Key) -> Option<u32> {
+		self.top_frame_mut().contract_info().size(key.into())
+	}
+
+	fn set_storage(
+		&mut self,
+		key: &Key,
+		value: Option<Vec<u8>>,
+		take_old: bool,
+	) -> Result<WriteOutcome, DispatchError> {
+		let frame = self.top_frame_mut();
+		frame.contract_info.get(&frame.account_id).write(
+			key.into(),
+			value,
+			Some(&mut frame.nested_storage),
+			take_old,
+		)
+	}
+
+	fn charge_storage(&mut self, diff: &Diff) {
+		self.top_frame_mut().nested_storage.charge(diff)
+	}
+}
+
+impl<'a, T, E> PrecompileExt for Stack<'a, T, E>
+where
+	T: Config,
+	E: Executable<T>,
+	BalanceOf<T>: Into<U256> + TryFrom<U256>,
+	MomentOf<T>: Into<U256>,
+	T::Hash: frame_support::traits::IsType<H256>,
+{
 	type T = T;
 
 	fn call(
@@ -1554,52 +1811,6 @@ where
 		result
 	}
 
-	fn delegate_call(
-		&mut self,
-		gas_limit: Weight,
-		deposit_limit: U256,
-		address: H160,
-		input_data: Vec<u8>,
-	) -> Result<(), ExecError> {
-		if is_precompile(&address) {
-			return self.run_precompile(
-				address,
-				true,
-				self.is_read_only(),
-				0u32.into(),
-				&input_data,
-			);
-		}
-
-		// We reset the return data now, so it is cleared out even if no new frame was executed.
-		// This is for example the case for unknown code hashes or creating the frame fails.
-		*self.last_frame_output_mut() = Default::default();
-
-		// Delegate-calls to non-contract accounts are considered success.
-		let Some(info) = ContractInfoOf::<T>::get(&address) else { return Ok(()) };
-		let executable = E::from_storage(info.code_hash, self.gas_meter_mut())?;
-		let top_frame = self.top_frame_mut();
-		let contract_info = top_frame.contract_info().clone();
-		let account_id = top_frame.account_id.clone();
-		let value = top_frame.value_transferred;
-		let executable = self.push_frame(
-			FrameArgs::Call {
-				dest: account_id,
-				cached_info: Some(contract_info),
-				delegated_call: Some(DelegatedCall {
-					executable,
-					caller: self.caller().clone(),
-					callee: address,
-				}),
-			},
-			value,
-			gas_limit,
-			deposit_limit.saturated_into::<BalanceOf<T>>(),
-			self.is_read_only(),
-		)?;
-		self.run(executable.expect(FRAME_ALWAYS_EXISTS_ON_INSTANTIATE), input_data)
-	}
-
 	fn instantiate(
 		&mut self,
 		gas_limit: Weight,
@@ -1630,50 +1841,6 @@ where
 		let address = T::AddressMapper::to_address(&self.top_frame().account_id);
 		self.run(executable.expect(FRAME_ALWAYS_EXISTS_ON_INSTANTIATE), input_data)
 			.map(|_| address)
-	}
-
-	fn terminate(&mut self, beneficiary: &H160) -> DispatchResult {
-		if self.is_recursive() {
-			return Err(Error::<T>::TerminatedWhileReentrant.into());
-		}
-		let frame = self.top_frame_mut();
-		if frame.entry_point == ExportedFunction::Constructor {
-			return Err(Error::<T>::TerminatedInConstructor.into());
-		}
-		let info = frame.terminate();
-		let beneficiary_account = T::AddressMapper::to_account_id(beneficiary);
-		frame.nested_storage.terminate(&info, beneficiary_account);
-
-		info.queue_trie_for_deletion();
-		let account_address = T::AddressMapper::to_address(&frame.account_id);
-		ContractInfoOf::<T>::remove(&account_address);
-		ImmutableDataOf::<T>::remove(&account_address);
-		<CodeInfo<T>>::decrement_refcount(info.code_hash)?;
-
-		Ok(())
-	}
-
-	fn get_storage(&mut self, key: &Key) -> Option<Vec<u8>> {
-		self.top_frame_mut().contract_info().read(key)
-	}
-
-	fn get_storage_size(&mut self, key: &Key) -> Option<u32> {
-		self.top_frame_mut().contract_info().size(key.into())
-	}
-
-	fn set_storage(
-		&mut self,
-		key: &Key,
-		value: Option<Vec<u8>>,
-		take_old: bool,
-	) -> Result<WriteOutcome, DispatchError> {
-		let frame = self.top_frame_mut();
-		frame.contract_info.get(&frame.account_id).write(
-			key.into(),
-			value,
-			Some(&mut frame.nested_storage),
-			take_old,
-		)
 	}
 
 	fn get_transient_storage(&self, key: &Key) -> Option<Vec<u8>> {
@@ -1741,10 +1908,6 @@ where
 			.unwrap_or_default()
 	}
 
-	fn own_code_hash(&mut self) -> &H256 {
-		&self.top_frame_mut().contract_info().code_hash
-	}
-
 	fn caller_is_origin(&self) -> bool {
 		self.origin == self.caller()
 	}
@@ -1752,35 +1915,6 @@ where
 	fn caller_is_root(&self) -> bool {
 		// if the caller isn't origin, then it can't be root.
 		self.caller_is_origin() && self.origin == Origin::Root
-	}
-
-	fn immutable_data_len(&mut self) -> u32 {
-		self.top_frame_mut().contract_info().immutable_data_len()
-	}
-
-	fn get_immutable_data(&mut self) -> Result<ImmutableData, DispatchError> {
-		if self.top_frame().entry_point == ExportedFunction::Constructor {
-			return Err(Error::<T>::InvalidImmutableAccess.into());
-		}
-
-		// Immutable is read from contract code being executed
-		let address = self
-			.top_frame()
-			.delegate
-			.as_ref()
-			.map(|d| d.callee)
-			.unwrap_or(T::AddressMapper::to_address(self.account_id()));
-		Ok(<ImmutableDataOf<T>>::get(address).ok_or_else(|| Error::<T>::InvalidImmutableAccess)?)
-	}
-
-	fn set_immutable_data(&mut self, data: ImmutableData) -> Result<(), DispatchError> {
-		let frame = self.top_frame_mut();
-		if frame.entry_point == ExportedFunction::Call || data.is_empty() {
-			return Err(Error::<T>::InvalidImmutableAccess.into());
-		}
-		frame.contract_info().set_immutable_data_len(data.len() as u32);
-		<ImmutableDataOf<T>>::insert(T::AddressMapper::to_address(&frame.account_id), &data);
-		Ok(())
 	}
 
 	fn balance(&self) -> U256 {
@@ -1842,16 +1976,6 @@ where
 		&mut self.top_frame_mut().nested_gas
 	}
 
-	fn charge_storage(&mut self, diff: &Diff) {
-		self.top_frame_mut().nested_storage.charge(diff)
-	}
-
-	fn call_runtime(&self, call: <Self::T as Config>::RuntimeCall) -> DispatchResultWithPostInfo {
-		let mut origin: T::RuntimeOrigin = RawOrigin::Signed(self.account_id().clone()).into();
-		origin.add_filter(T::CallFilter::contains);
-		call.dispatch(origin)
-	}
-
 	fn ecdsa_recover(&self, signature: &[u8; 65], message_hash: &[u8; 32]) -> Result<[u8; 33], ()> {
 		secp256k1_ecdsa_recover_compressed(signature, message_hash).map_err(|_| ())
 	}
@@ -1876,43 +2000,6 @@ where
 	#[cfg(feature = "runtime-benchmarks")]
 	fn transient_storage(&mut self) -> &mut TransientStorage<Self::T> {
 		&mut self.transient_storage
-	}
-
-	/// TODO: This should be changed to run the constructor of the supplied `hash`.
-	///
-	/// Because the immutable data is attached to a contract and not a code,
-	/// we need to update the immutable data too.
-	///
-	/// Otherwise we open a massive footgun:
-	/// If the immutables changed in the new code, the contract will brick.
-	///
-	/// A possible implementation strategy is to add a flag to `FrameArgs::Instantiate`,
-	/// so that `fn run()` will roll back any changes if this flag is set.
-	///
-	/// After running the constructor, the new immutable data is already stored in
-	/// `self.immutable_data` at the address of the (reverted) contract instantiation.
-	///
-	/// The `set_code_hash` contract API stays disabled until this change is implemented.
-	fn set_code_hash(&mut self, hash: H256) -> DispatchResult {
-		let frame = top_frame_mut!(self);
-
-		let info = frame.contract_info();
-
-		let prev_hash = info.code_hash;
-		info.code_hash = hash;
-
-		let code_info = CodeInfoOf::<T>::get(hash).ok_or(Error::<T>::CodeNotFound)?;
-
-		let old_base_deposit = info.storage_base_deposit();
-		let new_base_deposit = info.update_base_deposit(code_info.deposit());
-		let deposit = StorageDeposit::Charge(new_base_deposit)
-			.saturating_sub(&StorageDeposit::Charge(old_base_deposit));
-
-		frame.nested_storage.charge_deposit(frame.account_id.clone(), deposit);
-
-		<CodeInfo<T>>::increment_refcount(hash)?;
-		<CodeInfo<T>>::decrement_refcount(prev_hash)?;
-		Ok(())
 	}
 
 	fn is_read_only(&self) -> bool {
