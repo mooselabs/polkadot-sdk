@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1742384821357,
+  "lastUpdate": 1742405089204,
   "repoUrl": "https://github.com/paritytech/polkadot-sdk",
   "entries": {
     "approval-voting-regression-bench": [
@@ -80836,6 +80836,105 @@ window.BENCHMARK_DATA = {
           {
             "name": "test-environment",
             "value": 3.371810696731999,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "1728078+michalkucharczyk@users.noreply.github.com",
+            "name": "Michal Kucharczyk",
+            "username": "michalkucharczyk"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "954d8571df26b5cc0d342c6c05d414bd6912f1cd",
+          "message": "`fatxpool`: report_invalid: do not ban Future/Stale txs from re-entering the view (#7777)\n\n#### Description\n\nAvoid banning future/stale transactions reported as invalid by the\nauthorship module.\n\n#### Note for reviewers\nWhen re-org is handled by transaction pool, the view for new fork\n(`Bn'`) is cloned from the tip of the other existing fork (`Bn`). The\nnew view is not entirely re-validated during the maintain process (it\nwill be revalidated in the background), so it may happen that it\ncontains transactions that are ready on (`Bn`) but actually are not\nready on (`Bn'`). All required (which are expected to be in retracted\nset) transactions are submitted to the new view, but order of txs in\nready iterator is not updated.\n\nThe proper fix would require to re-build the the iterator - which is not\ntrivial as we do not have tags for transactions for block `Bn'` yet. We\ncould force retracted txs to be before ready transactions but it also\ndoes not feel to be a good solution - it still would be best effort\ntrial.\n\nFor now allowing future transactions to re-enter the view immediately is\nin my opinion a good compromise. This PR is a quick fix and actually\nbrings back behavior of txpool from before merging #6008. The bad thing\nis that incorrect transactions are detected during block authorship, but\nthis situation to happen requires some specific pre-conditions which\nshould be rare.\n\nIf this PR is not merged, some transaction will get included into\nblocks, only after\n[`DEFAULT_BAN_TIME_SECS`](https://github.com/paritytech/polkadot-sdk/blob/4b39ff00b887039bc3e02a763a29deb09df56833/substrate/client/transaction-pool/src/graph/rotator.rs#L37),\nwhich is pretty bad.\n\n---------\n\nCo-authored-by: cmd[bot] <41898282+github-actions[bot]@users.noreply.github.com>",
+          "timestamp": "2025-03-19T16:20:25Z",
+          "tree_id": "1de422e3985f413c3a4cd2e3600fb1cf6ffe5e55",
+          "url": "https://github.com/paritytech/polkadot-sdk/commit/954d8571df26b5cc0d342c6c05d414bd6912f1cd"
+        },
+        "date": 1742405072100,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "Sent to peers",
+            "value": 63625.44,
+            "unit": "KiB"
+          },
+          {
+            "name": "Received from peers",
+            "value": 52946.3,
+            "unit": "KiB"
+          },
+          {
+            "name": "approval-voting-parallel/approval-voting-parallel-db",
+            "value": 1.8743793594800073,
+            "unit": "seconds"
+          },
+          {
+            "name": "approval-voting",
+            "value": 0.00001798009,
+            "unit": "seconds"
+          },
+          {
+            "name": "approval-voting-parallel/approval-voting-parallel-subsystem",
+            "value": 0.4836234763799962,
+            "unit": "seconds"
+          },
+          {
+            "name": "approval-voting-parallel",
+            "value": 11.837292225980002,
+            "unit": "seconds"
+          },
+          {
+            "name": "approval-voting/test-environment",
+            "value": 0.00001798009,
+            "unit": "seconds"
+          },
+          {
+            "name": "approval-distribution/test-environment",
+            "value": 0.000019511580000000003,
+            "unit": "seconds"
+          },
+          {
+            "name": "test-environment",
+            "value": 3.393729544832096,
+            "unit": "seconds"
+          },
+          {
+            "name": "approval-distribution",
+            "value": 0.000019511580000000003,
+            "unit": "seconds"
+          },
+          {
+            "name": "approval-voting-parallel/approval-voting-parallel-0",
+            "value": 2.36025767503,
+            "unit": "seconds"
+          },
+          {
+            "name": "approval-voting-parallel/approval-voting-gather-signatures",
+            "value": 0.00561300103,
+            "unit": "seconds"
+          },
+          {
+            "name": "approval-voting-parallel/approval-voting-parallel-2",
+            "value": 2.39189307836,
+            "unit": "seconds"
+          },
+          {
+            "name": "approval-voting-parallel/approval-voting-parallel-1",
+            "value": 2.3541048763099983,
+            "unit": "seconds"
+          },
+          {
+            "name": "approval-voting-parallel/approval-voting-parallel-3",
+            "value": 2.36742075939,
             "unit": "seconds"
           }
         ]
